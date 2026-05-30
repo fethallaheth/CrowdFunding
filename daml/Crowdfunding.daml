@@ -1,0 +1,89 @@
+module Crowdfunding where
+
+import Token
+import PledgeReceipt
+
+claimAll : [(Party, Decimal, ContractId PledgeReceipt)] -> Party -> Update [ContractId Token]
+claimAll [] _ = pure []
+claimAll ((_, _, receiptCid) :: rest) claimer = do
+  tokenCid <- exercise receiptCid PledgeReceipt_Claim with claimer
+  restCids <- claimAll rest claimer
+  pure (tokenCid :: restCids)
+
+findReceipt : Party -> [(Party, Decimal, ContractId PledgeReceipt)] -> Optional (ContractId PledgeReceipt)
+findReceipt p [] = None
+findReceipt p ((p', _, cid) :: rest) =
+  if p == p' then Some cid
+  else findReceipt p rest
+
+template Campaign
+  with
+    creator : Party
+    targetAmount : Decimal
+    createdAt : Time
+    deadline : Time
+    pledges : [(Party, Decimal, ContractId PledgeReceipt)]
+  where
+    signatory creator
+    ensure targetAmount > 0.0 && deadline > createdAt
+
+    choice Pledge : ContractId Campaign
+      with
+        pledger : Party
+        tokenCid : ContractId Token
+      controller pledger
+      do
+        assert (findReceipt pledger pledges == None)
+        token <- fetch tokenCid
+        assert (token.owner == pledger)
+        assert (token.lock == None)
+        
+        lockedTokenCid <- exercise tokenCid Token_Lock with locker = creator
+        
+        receipt <- create PledgeReceipt with
+          backer = pledger
+          creator = creator
+          amount = token.amount
+          tokenCid = lockedTokenCid
+        create this with pledges = (pledger, token.amount, receipt) :: pledges
+
+    choice CancelPledge : ContractId Campaign
+      with
+        pledger : Party
+      controller pledger
+      do
+        now <- getTime
+        assert (now < deadline)
+        case findReceipt pledger pledges of
+          None -> abort "no pledge found"
+          Some receiptCid -> do
+            _ <- exercise receiptCid PledgeReceipt_Redeem
+            let remaining = filter (\(p, _, _) -> p /= pledger) pledges
+            create this with pledges = remaining
+
+    choice Refund : ContractId Campaign
+      with
+        pledger : Party
+      controller pledger
+      do
+        now <- getTime
+        assert (now > deadline)
+        let total = foldl (\acc (_, amt, _) -> acc + amt) 0.0 pledges
+        assert (total < targetAmount)
+        case findReceipt pledger pledges of
+          None -> abort "no pledge found"
+          Some receiptCid -> do
+            _ <- exercise receiptCid PledgeReceipt_Redeem
+            let remaining = filter (\(p, _, _) -> p /= pledger) pledges
+            create this with pledges = remaining
+
+    choice Collect : ()
+      controller creator
+      do
+        now <- getTime
+        assert (now > deadline)
+        let total = foldl (\acc (_, amt, _) -> acc + amt) 0.0 pledges
+        assert (total >= targetAmount)
+        _ <- claimAll pledges creator
+        archive self
+        pure ()

@@ -1,0 +1,25 @@
+module PledgeReceipt where
+
+import Token
+
+template PledgeReceipt
+  with
+    backer : Party
+    creator : Party 
+    amount : Decimal
+    tokenCid : ContractId Token
+  where
+    signatory backer, creator 
+
+    choice PledgeReceipt_Redeem : ContractId Token
+      controller backer 
+      do 
+        exercise tokenCid Token_Unlock 
+
+    choice PledgeReceipt_Claim : ContractId Token
+      with 
+        claimer : Party
+      controller claimer
+      do 
+        assert (claimer == creator)
+        exercise tokenCid Token_LockedTransfer with newOwner = claimer

@@ -1,0 +1,100 @@
+module Token where
+
+import DA.Optional (optionalToList)
+
+template Token
+  with
+    admin : Party
+    owner : Party
+    amount : Decimal
+    instrumentId : (Party, Text)
+    lock : Optional Party 
+    meta : [(Text, Text)]
+  where
+    signatory admin
+    observer owner, (optionalToList lock) 
+    ensure amount > 0.0
+
+    choice Token_GetInfo : Token
+      with
+        reader : Party
+      controller reader
+      do
+        pure this
+
+    choice Token_Transfer : ContractId Token
+      with
+        newOwner : Party
+      controller owner
+      do
+        assert (lock == None)
+        create this with owner = newOwner
+
+    choice Token_Lock : ContractId Token
+      with 
+        locker : Party 
+      controller owner 
+      do 
+        assert (lock == None)
+        create this with lock = Some locker
+
+    choice Token_Unlock : ContractId Token
+      controller (optionalToList lock)
+      do 
+        create this with lock = None
+
+    choice Token_LockedTransfer : ContractId Token
+      with
+        newOwner : Party
+      controller (optionalToList lock)
+      do
+        create this with owner = newOwner, lock = None
+
+    choice Token_Burn : ()
+      controller owner
+      do
+        archive self
+        pure ()
+
+    choice Token_Split : (ContractId Token, ContractId Token)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assert (lock == None)
+        assert (splitAmount > 0.0 && splitAmount < amount)
+        let remaining = amount - splitAmount
+        archive self
+        token1 <- create this with amount = splitAmount
+        token2 <- create this with amount = remaining
+        pure (token1, token2)
+
+    choice Token_Merge : ContractId Token
+      with
+        otherToken : ContractId Token
+      controller owner
+      do
+        assert (lock == None)
+        other <- fetch otherToken
+        assert (other.lock == None)
+        assert (other.owner == owner)
+        archive self
+        archive otherToken
+        create this with amount = amount + other.amount
+
+    nonconsuming choice Token_Mint : ContractId Token
+      with
+        to : Party
+        mintAmount : Decimal
+      controller admin
+      do
+        create this with owner = to; amount = mintAmount
+
+    choice Token_AdminBurn : ()
+      with
+        target : Party
+      controller admin
+      do
+        assert (target == owner)
+        archive self
+        pure ()

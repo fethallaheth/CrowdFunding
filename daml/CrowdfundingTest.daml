@@ -1,0 +1,43 @@
+module CrowdfundingTest where
+
+import Daml.Script
+import Token
+import Crowdfunding
+import DA.Time
+
+minimalTest : Script ()
+minimalTest = do
+  admin <- allocateParty "Bank"
+  creator <- allocateParty "ProjectCreator"
+  backer <- allocateParty "Alice"
+
+  startTime <- getTime
+  let deadlineTime = addRelTime startTime (days 7)
+
+  tokenCid <- submit admin do
+    createCmd Token with
+      admin
+      owner = backer
+      amount = 100.0
+      instrumentId = (admin, "USD")
+      lock = None
+      meta = []
+
+  campaignCid <- submit creator do
+    createCmd Campaign with
+      creator
+      targetAmount = 100.0
+      createdAt = startTime
+      deadline = deadlineTime
+      pledges = []
+
+  updatedCampaignCid <- submitMulti [backer] [creator] do
+    exerciseCmd campaignCid Pledge with
+      pledger = backer
+      tokenCid
+
+  Some campaignState <- queryContractId creator updatedCampaignCid
+
+  assert (length campaignState.pledges == 1)
+
+  pure ()
